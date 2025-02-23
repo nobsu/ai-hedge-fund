@@ -6,115 +6,105 @@ import os
 
 def sort_analyst_signals(signals):
     """Sort analyst signals in a consistent order."""
-    # Create order mapping from ANALYST_ORDER
-    analyst_order = {display: idx for idx, (display, _) in enumerate(ANALYST_ORDER)}
-    analyst_order["Risk Management"] = len(ANALYST_ORDER)  # Add Risk Management at the end
-
+    # 创建加密货币分析代理的顺序
+    CRYPTO_ANALYST_ORDER = [
+        ("Technical Analysis", "crypto_technical_agent"),
+        ("Risk Management", "crypto_risk_manager"),
+    ]
+    
+    # 创建顺序映射
+    analyst_order = {display: idx for idx, (display, _) in enumerate(CRYPTO_ANALYST_ORDER)}
+    
     return sorted(signals, key=lambda x: analyst_order.get(x[0], 999))
 
 
-def print_trading_output(result: dict) -> None:
-    """
-    Print formatted trading results with colored tables for multiple tickers.
-
-    Args:
-        result (dict): Dictionary containing decisions and analyst signals for multiple tickers
-    """
-    decisions = result.get("decisions")
-    if not decisions:
-        print(f"{Fore.RED}No trading decisions available{Style.RESET_ALL}")
+def print_trading_output(result):
+    """打印交易系统的输出结果"""
+    if not result or "decisions" not in result or "analyst_signals" not in result:
+        print("No results to display")
         return
 
-    # Print decisions for each ticker
-    for ticker, decision in decisions.items():
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}Analysis for {Fore.CYAN}{ticker}{Style.RESET_ALL}")
-        print(f"{Fore.WHITE}{Style.BRIGHT}{'=' * 50}{Style.RESET_ALL}")
+    decisions = result["decisions"]
+    analyst_signals = result["analyst_signals"]
+    portfolio = result.get("data", {}).get("portfolio", {})
 
-        # Prepare analyst signals table for this ticker
-        table_data = []
-        for agent, signals in result.get("analyst_signals", {}).items():
-            if ticker not in signals:
-                continue
+    print(f"\n{Fore.CYAN}Crypto Trading Analysis{Style.RESET_ALL}")
+    print("=" * 50)
 
-            signal = signals[ticker]
-            agent_name = agent.replace("_agent", "").replace("_", " ").title()
-            signal_type = signal.get("signal", "").upper()
+    # 为每个交易对打印分析结果
+    for symbol in analyst_signals.get("crypto_technical_agent", {}).keys():
+        print(f"\n{Fore.YELLOW}{symbol}{Style.RESET_ALL}")
+        print("-" * 30)
+        
+        tech_signal = analyst_signals.get("crypto_technical_agent", {}).get(symbol, {})
+        risk_data = analyst_signals.get("crypto_risk_manager", {}).get(symbol, {})
+        
+        # 显示关键指标
+        if tech_signal:
+            signal = tech_signal.get('signal', 'UNKNOWN')
+            signal_color = Fore.GREEN if signal == 'bullish' else Fore.RED if signal == 'bearish' else Fore.YELLOW
+            print(f"Signal: {signal_color}{signal.upper()}{Style.RESET_ALL}")
+            print(f"Timeframes Analyzed: {', '.join(tech_signal.get('timeframes', ['1h']))}")
+            print(f"Key Indicators:")
+            reasoning = tech_signal.get('reasoning', 'No analysis available')
+            for analysis in reasoning.split(' | '):
+                print(f"  • {analysis}")
+        
+        # 显示风险信息
+        if risk_data:
+            volatility = risk_data.get('volatility', 0) * 100
+            volatility_color = Fore.RED if volatility > 40 else Fore.YELLOW if volatility > 20 else Fore.GREEN
+            print(f"\nRisk Level: {volatility_color}{volatility:.1f}%{Style.RESET_ALL}")
+        
+        # 显示交易决策
+        if decisions and symbol in decisions:
+            decision = decisions[symbol]
+            quantity = float(decision.get("quantity", 0))
+            current_price = risk_data.get("current_price", 0)
+            trade_value = quantity * current_price
+            
+            print(f"\n{Fore.WHITE}Trading Decision:{Style.RESET_ALL}")
+            print(f"Action: {Fore.GREEN if decision['action'] == 'buy' else Fore.RED}{decision['action'].upper()}{Style.RESET_ALL}")
+            print(f"Amount: {quantity:.8f} {symbol.replace('USDT', '')}")
+            print(f"Value: ${trade_value:,.2f}")
+            print(f"Confidence: {decision['confidence']:.1f}%")
+            
+            # 显示止损和止盈价格
+            if risk_data:
+                if risk_data.get('stop_loss', 0) > 0:
+                    print(f"Stop Loss: ${risk_data['stop_loss']:,.2f}")
+                if risk_data.get('take_profit', 0) > 0:
+                    print(f"Take Profit: ${risk_data['take_profit']:,.2f}")
+            
+            # 显示投资组合分配
+            if trade_value > 0 and portfolio.get('cash', 0) > 0:
+                allocation_percentage = (trade_value / portfolio['cash']) * 100
+                print(f"Portfolio Allocation: {allocation_percentage:.1f}%")
+        
+        print("-" * 30)
 
-            signal_color = {
-                "BULLISH": Fore.GREEN,
-                "BEARISH": Fore.RED,
-                "NEUTRAL": Fore.YELLOW,
-            }.get(signal_type, Fore.WHITE)
-
-            table_data.append(
-                [
-                    f"{Fore.CYAN}{agent_name}{Style.RESET_ALL}",
-                    f"{signal_color}{signal_type}{Style.RESET_ALL}",
-                    f"{Fore.YELLOW}{signal.get('confidence')}%{Style.RESET_ALL}",
-                ]
-            )
-
-        # Sort the signals according to the predefined order
-        table_data = sort_analyst_signals(table_data)
-
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}ANALYST SIGNALS:{Style.RESET_ALL} [{Fore.CYAN}{ticker}{Style.RESET_ALL}]")
-        print(
-            tabulate(
-                table_data,
-                headers=[f"{Fore.WHITE}Analyst", "Signal", "Confidence"],
-                tablefmt="grid",
-                colalign=("left", "center", "right"),
-            )
-        )
-
-        # Print Trading Decision Table
-        action = decision.get("action", "").upper()
-        action_color = {"BUY": Fore.GREEN, "SELL": Fore.RED, "HOLD": Fore.YELLOW}.get(action, Fore.WHITE)
-
-        decision_data = [
-            ["Action", f"{action_color}{action}{Style.RESET_ALL}"],
-            ["Quantity", f"{action_color}{decision.get('quantity')}{Style.RESET_ALL}"],
-            [
-                "Confidence",
-                f"{Fore.YELLOW}{decision.get('confidence'):.1f}%{Style.RESET_ALL}",
-            ],
-        ]
-
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}TRADING DECISION:{Style.RESET_ALL} [{Fore.CYAN}{ticker}{Style.RESET_ALL}]")
-        print(tabulate(decision_data, tablefmt="grid", colalign=("left", "right")))
-
-        # Print Reasoning
-        print(f"\n{Fore.WHITE}{Style.BRIGHT}Reasoning:{Style.RESET_ALL} {Fore.CYAN}{decision.get('reasoning')}{Style.RESET_ALL}")
-
-    # Print Portfolio Summary
-    print(f"\n{Fore.WHITE}{Style.BRIGHT}PORTFOLIO SUMMARY:{Style.RESET_ALL}")
-    portfolio_data = []
-    for ticker, decision in decisions.items():
-        action = decision.get("action", "").upper()
-        action_color = {
-            "BUY": Fore.GREEN,
-            "SELL": Fore.RED,
-            "HOLD": Fore.YELLOW,
-            "COVER": Fore.GREEN,
-            "SHORT": Fore.RED,
-        }.get(action, Fore.WHITE)
-        portfolio_data.append(
-            [
-                f"{Fore.CYAN}{ticker}{Style.RESET_ALL}",
-                f"{action_color}{action}{Style.RESET_ALL}",
-                f"{action_color}{decision.get('quantity')}{Style.RESET_ALL}",
-                f"{Fore.YELLOW}{decision.get('confidence'):.1f}%{Style.RESET_ALL}",
-            ]
-        )
-
-    print(
-        tabulate(
-            portfolio_data,
-            headers=[f"{Fore.WHITE}Ticker", "Action", "Quantity", "Confidence"],
-            tablefmt="grid",
-            colalign=("left", "center", "right", "right"),
-        )
-    )
+    # 显示投资组合信息
+    if portfolio:
+        print(f"\n{Fore.WHITE}Portfolio Summary:{Style.RESET_ALL}")
+        print(f"Cash Balance: ${portfolio.get('cash', 0):,.2f}")
+        
+        # 计算总持仓价值和加权平均波动率
+        total_position_value = 0
+        weighted_volatility = 0
+        for symbol, pos in portfolio.get('positions', {}).items():
+            risk_data = analyst_signals.get('crypto_risk_manager', {}).get(symbol, {})
+            current_price = risk_data.get('current_price', 0)
+            position_value = pos['amount'] * current_price
+            total_position_value += position_value
+            
+            if position_value > 0:
+                weighted_volatility += risk_data.get('volatility', 0) * (position_value / total_position_value)
+        
+        print(f"Position Value: ${total_position_value:,.2f}")
+        print(f"Total Value: ${(portfolio.get('cash', 0) + total_position_value):,.2f}")
+        if weighted_volatility > 0:
+            volatility_color = Fore.RED if weighted_volatility > 0.4 else Fore.YELLOW if weighted_volatility > 0.2 else Fore.GREEN
+            print(f"Portfolio Risk Level: {volatility_color}{weighted_volatility*100:.1f}%{Style.RESET_ALL}")
 
 
 def print_backtest_results(table_rows: list) -> None:

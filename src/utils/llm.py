@@ -1,9 +1,11 @@
 """Helper functions for LLM"""
 
 import json
-from typing import TypeVar, Type, Optional, Any
-from pydantic import BaseModel
+from typing import TypeVar, Type, Optional, Any, Callable
+from pydantic import BaseModel, ValidationError
 from utils.progress import progress
+from colorama import Fore, Style
+from utils.logger import log_llm_call, log_error
 
 T = TypeVar('T', bound=BaseModel)
 
@@ -14,7 +16,7 @@ def call_llm(
     pydantic_model: Type[T],
     agent_name: Optional[str] = None,
     max_retries: int = 3,
-    default_factory = None
+    default_factory: Callable[[], T] = None
 ) -> T:
     """
     Makes an LLM call with retry logic, handling both Deepseek and non-Deepseek models.
@@ -33,43 +35,51 @@ def call_llm(
     """
     from llm.models import get_model, get_model_info
     
-    model_info = get_model_info(model_name)
-    llm = get_model(model_name, model_provider)
-    
-    # For non-Deepseek models, we can use structured output
-    if not (model_info and model_info.is_deepseek()):
-        llm = llm.with_structured_output(
-            pydantic_model,
-            method="json_mode",
+    try:
+        model = get_model(model_name, model_provider)
+        model_info = get_model_info(model_name)
+        
+        if not model:
+            raise ValueError(f"Failed to initialize model {model_name}")
+            
+        # 调用LLM
+        response = model.invoke(prompt)
+        
+        # 记录到日志文件
+        log_llm_call(
+            model_name=model_name,
+            model_provider=model_provider,
+            agent_name=agent_name or "Unknown Agent",
+            prompt=prompt.to_string(),
+            response=response.content
         )
-    
-    # Call the LLM with retries
-    for attempt in range(max_retries):
+        
+        # 只在终端显示简短信息
+        print(f"\n{Fore.CYAN}[{agent_name}] Called {model_provider}-{model_name} model{Style.RESET_ALL}")
+        
         try:
-            # Call the LLM
-            result = llm.invoke(prompt)
-            
-            # For Deepseek, we need to extract and parse the JSON manually
+            # 处理 Deepseek 模型的响应
             if model_info and model_info.is_deepseek():
-                parsed_result = extract_json_from_deepseek_response(result.content)
-                if parsed_result:
-                    return pydantic_model(**parsed_result)
+                result = extract_json_from_deepseek_response(response.content)
+                if not result:
+                    raise json.JSONDecodeError("Failed to extract JSON from Deepseek response", response.content, 0)
             else:
-                return result
-                
-        except Exception as e:
-            if agent_name:
-                progress.update_status(agent_name, None, f"Error - retry {attempt + 1}/{max_retries}")
+                # 处理其他模型的响应
+                result = json.loads(response.content)
             
-            if attempt == max_retries - 1:
-                print(f"Error in LLM call after {max_retries} attempts: {e}")
-                # Use default_factory if provided, otherwise create a basic default
-                if default_factory:
-                    return default_factory()
-                return create_default_response(pydantic_model)
-
-    # This should never be reached due to the retry logic above
-    return create_default_response(pydantic_model)
+            return pydantic_model(**result)
+            
+        except (json.JSONDecodeError, ValidationError) as e:
+            log_error(f"Error parsing model response: {e}")
+            if default_factory:
+                return default_factory()
+            raise
+            
+    except Exception as e:
+        log_error(f"Error calling {model_provider} model: {e}")
+        if default_factory:
+            return default_factory()
+        raise
 
 def create_default_response(model_class: Type[T]) -> T:
     """Creates a safe default response based on the model's fields."""
@@ -95,13 +105,28 @@ def create_default_response(model_class: Type[T]) -> T:
 def extract_json_from_deepseek_response(content: str) -> Optional[dict]:
     """Extracts JSON from Deepseek's markdown-formatted response."""
     try:
+        # 尝试直接解析整个响应
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            pass
+        
+        # 尝试从 markdown 代码块中提取
         json_start = content.find("```json")
         if json_start != -1:
-            json_text = content[json_start + 7:]  # Skip past ```json
+            json_text = content[json_start + 7:]
             json_end = json_text.find("```")
             if json_end != -1:
                 json_text = json_text[:json_end].strip()
                 return json.loads(json_text)
+        
+        # 尝试查找第一个 { 和最后一个 }
+        start = content.find("{")
+        end = content.rfind("}")
+        if start != -1 and end != -1:
+            json_text = content[start:end + 1]
+            return json.loads(json_text)
+            
     except Exception as e:
-        print(f"Error extracting JSON from Deepseek response: {e}")
+        log_error(f"Error extracting JSON from Deepseek response: {e}")
     return None

@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+logs/
 env/
 build/
 develop-eggs/
@@ -20,6 +21,7 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.whl
 
 # Virtual Environment
 venv/
@@ -33,6 +35,7 @@ ENV/
 .vscode/
 *.swp
 *.swo
+*.iml
 
 # OS
 .DS_Store

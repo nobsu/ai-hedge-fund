@@ -1,6 +1,8 @@
 import os
 import pandas as pd
 import requests
+from binance.client import Client
+from binance.exceptions import BinanceAPIException
 
 from data.cache import get_cache
 from data.models import (
@@ -280,3 +282,64 @@ def prices_to_df(prices: list[Price]) -> pd.DataFrame:
 def get_price_data(ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
     prices = get_prices(ticker, start_date, end_date)
     return prices_to_df(prices)
+
+
+class CryptoAPI:
+    def __init__(self):
+        self.client = Client(
+            os.getenv('BINANCE_API_KEY'),
+            os.getenv('BINANCE_API_SECRET')
+        )
+    
+    def get_crypto_prices(self, symbol: str, start_date: str, end_date: str, interval: str = "1h") -> pd.DataFrame:
+        """获取加密货币历史价格数据"""
+        try:
+            # 转换时间间隔到Binance API格式
+            interval_map = {
+                "1m": Client.KLINE_INTERVAL_1MINUTE,
+                "5m": Client.KLINE_INTERVAL_5MINUTE,
+                "15m": Client.KLINE_INTERVAL_15MINUTE,
+                "1h": Client.KLINE_INTERVAL_1HOUR,
+                "4h": Client.KLINE_INTERVAL_4HOUR,
+                "1d": Client.KLINE_INTERVAL_1DAY,
+            }
+            
+            klines = self.client.get_historical_klines(
+                symbol,
+                interval_map.get(interval, Client.KLINE_INTERVAL_1HOUR),
+                start_date,
+                end_date
+            )
+            
+            # 转换为DataFrame
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'buy_base_volume',
+                'buy_quote_volume', 'ignore'
+            ])
+            
+            # 处理数据类型
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+                
+            return df.set_index('timestamp')
+            
+        except Exception as e:
+            print(f"Error fetching crypto prices: {e}")
+            return pd.DataFrame()
+    
+    def get_market_data(self, symbol: str) -> dict:
+        """获取市场数据如24h成交量、价格变化等"""
+        try:
+            ticker = self.client.get_ticker(symbol=symbol)
+            return {
+                'price_change': float(ticker['priceChange']),
+                'price_change_percent': float(ticker['priceChangePercent']),
+                'weighted_avg_price': float(ticker['weightedAvgPrice']),
+                'volume': float(ticker['volume']),
+                'quote_volume': float(ticker['quoteVolume'])
+            }
+        except BinanceAPIException as e:
+            print(f"Error fetching market data: {e}")
+            return {}

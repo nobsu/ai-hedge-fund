@@ -20,6 +20,10 @@ from utils.analysts import ANALYST_ORDER, get_analyst_nodes
 from utils.progress import progress
 from llm.models import LLM_ORDER, get_model_info
 
+# 导入加密货币相关的代理
+from agents.crypto_technicals import crypto_technical_agent
+from agents.crypto_risk_manager import crypto_risk_manager
+
 import argparse
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -133,8 +137,85 @@ def create_workflow(selected_analysts=None):
     return workflow
 
 
+def run_crypto_trading(
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+    initial_capital: float = 10000,
+    show_reasoning: bool = False,
+    model_name: str = "gpt-4",
+    model_provider: str = "OpenAI"
+):
+    """运行加密货币交易系统"""
+    # 初始化投资组合
+    portfolio = {
+        "cash": initial_capital,
+        "positions": {
+            symbol: {
+                "amount": 0.0,
+                "avg_price": 0.0
+            } for symbol in symbols
+        }
+    }
+    
+    # 创建工作流
+    workflow = create_crypto_workflow()
+    agent = workflow.compile()
+    
+    final_state = agent.invoke({
+        "messages": [
+            HumanMessage(
+                content="Make trading decisions based on the provided data.",
+            )
+        ],
+        "data": {
+            "symbols": symbols,
+            "portfolio": portfolio,
+            "start_date": start_date,
+            "end_date": end_date,
+            "analyst_signals": {},
+        },
+        "metadata": {
+            "show_reasoning": show_reasoning,
+            "model_name": model_name,
+            "model_provider": model_provider
+        },
+    })
+    
+    return {
+        "decisions": parse_hedge_fund_response(final_state["messages"][-1].content),
+        "analyst_signals": final_state["data"]["analyst_signals"],
+    }
+
+
+def create_crypto_workflow(selected_analysts=None):
+    """创建加密货币交易工作流"""
+    workflow = StateGraph(AgentState)
+    workflow.add_node("start_node", start)
+
+    # 只添加加密货币相关的分析代理
+    workflow.add_node("crypto_technical_agent", crypto_technical_agent)
+    workflow.add_node("crypto_risk_manager", crypto_risk_manager)
+    workflow.add_node("portfolio_management_agent", portfolio_management_agent)
+
+    # 设置工作流
+    workflow.add_edge("start_node", "crypto_technical_agent")
+    workflow.add_edge("crypto_technical_agent", "crypto_risk_manager")
+    workflow.add_edge("crypto_risk_manager", "portfolio_management_agent")
+    workflow.add_edge("portfolio_management_agent", END)
+
+    workflow.set_entry_point("start_node")
+    return workflow
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the hedge fund trading system")
+    parser = argparse.ArgumentParser(description="运行加密货币交易系统")
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        required=True,
+        help="交易对列表，如 BTCUSDT,ETHUSDT"
+    )
     parser.add_argument(
         "--initial-cash",
         type=float,
@@ -142,51 +223,17 @@ if __name__ == "__main__":
         help="Initial cash position. Defaults to 100000.0)"
     )
     parser.add_argument(
-        "--margin-requirement",
-        type=float,
-        default=0.0,
-        help="Initial margin requirement. Defaults to 0.0"
-    )
-    parser.add_argument("--tickers", type=str, required=True, help="Comma-separated list of stock ticker symbols")
-    parser.add_argument(
         "--start-date",
         type=str,
         help="Start date (YYYY-MM-DD). Defaults to 3 months before end date",
     )
     parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD). Defaults to today")
     parser.add_argument("--show-reasoning", action="store_true", help="Show reasoning from each agent")
-    parser.add_argument(
-        "--show-agent-graph", action="store_true", help="Show the agent graph"
-    )
 
     args = parser.parse_args()
 
-    # Parse tickers from comma-separated string
-    tickers = [ticker.strip() for ticker in args.tickers.split(",")]
-
-    # Select analysts
-    selected_analysts = None
-    choices = questionary.checkbox(
-        "Select your AI analysts.",
-        choices=[questionary.Choice(display, value=value) for display, value in ANALYST_ORDER],
-        instruction="\n\nInstructions: \n1. Press Space to select/unselect analysts.\n2. Press 'a' to select/unselect all.\n3. Press Enter when done to run the hedge fund.\n",
-        validate=lambda x: len(x) > 0 or "You must select at least one analyst.",
-        style=questionary.Style(
-            [
-                ("checkbox-selected", "fg:green"),
-                ("selected", "fg:green noinherit"),
-                ("highlighted", "noinherit"),
-                ("pointer", "noinherit"),
-            ]
-        ),
-    ).ask()
-
-    if not choices:
-        print("\n\nInterrupt received. Exiting...")
-        sys.exit(0)
-    else:
-        selected_analysts = choices
-        print(f"\nSelected analysts: {', '.join(Fore.GREEN + choice.title().replace('_', ' ') + Style.RESET_ALL for choice in choices)}\n")
+    # Parse symbols from comma-separated string
+    symbols = [symbol.strip() for symbol in args.symbols.split(",")]
 
     # Select LLM model
     model_choice = questionary.select(
@@ -213,31 +260,6 @@ if __name__ == "__main__":
             model_provider = "Unknown"
             print(f"\nSelected model: {Fore.GREEN + Style.BRIGHT}{model_choice}{Style.RESET_ALL}\n")
 
-    # Create the workflow with selected analysts
-    workflow = create_workflow(selected_analysts)
-    app = workflow.compile()
-
-    if args.show_agent_graph:
-        file_path = ""
-        if selected_analysts is not None:
-            for selected_analyst in selected_analysts:
-                file_path += selected_analyst + "_"
-            file_path += "graph.png"
-        save_graph_as_png(app, file_path)
-
-    # Validate dates if provided
-    if args.start_date:
-        try:
-            datetime.strptime(args.start_date, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("Start date must be in YYYY-MM-DD format")
-
-    if args.end_date:
-        try:
-            datetime.strptime(args.end_date, "%Y-%m-%d")
-        except ValueError:
-            raise ValueError("End date must be in YYYY-MM-DD format")
-
     # Set the start and end dates
     end_date = args.end_date or datetime.now().strftime("%Y-%m-%d")
     if not args.start_date:
@@ -247,35 +269,25 @@ if __name__ == "__main__":
     else:
         start_date = args.start_date
 
-    # Initialize portfolio with cash amount and stock positions
+    # Initialize portfolio
     portfolio = {
-        "cash": args.initial_cash,  # Initial cash amount
-        "margin_requirement": args.margin_requirement,  # Initial margin requirement
+        "cash": args.initial_cash,
         "positions": {
-            ticker: {
-                "long": 0,  # Number of shares held long
-                "short": 0,  # Number of shares held short
-                "long_cost_basis": 0.0,  # Average cost basis for long positions
-                "short_cost_basis": 0.0,  # Average price at which shares were sold short
-            } for ticker in tickers
-        },
-        "realized_gains": {
-            ticker: {
-                "long": 0.0,  # Realized gains from long positions
-                "short": 0.0,  # Realized gains from short positions
-            } for ticker in tickers
+            symbol: {
+                "amount": 0.0,
+                "avg_price": 0.0
+            } for symbol in symbols
         }
     }
 
-    # Run the hedge fund
-    result = run_hedge_fund(
-        tickers=tickers,
+    # 运行加密货币交易系统
+    result = run_crypto_trading(
+        symbols=symbols,
         start_date=start_date,
         end_date=end_date,
-        portfolio=portfolio,
+        initial_capital=args.initial_cash,
         show_reasoning=args.show_reasoning,
-        selected_analysts=selected_analysts,
         model_name=model_choice,
-        model_provider=model_provider,
+        model_provider=model_provider
     )
     print_trading_output(result)
