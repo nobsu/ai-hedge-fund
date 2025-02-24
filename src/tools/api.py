@@ -326,7 +326,7 @@ class CryptoAPI:
             return df.set_index('timestamp')
             
         except Exception as e:
-            print(f"Error fetching crypto prices: {e}")
+            print(f"Error fetching crypto prices: {symbol} - {e}")
             return pd.DataFrame()
     
     def get_market_data(self, symbol: str) -> dict:

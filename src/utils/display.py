@@ -2,7 +2,13 @@ from colorama import Fore, Style
 from tabulate import tabulate
 from .analysts import ANALYST_ORDER
 import os
+from rich.console import Console
+from rich.table import Table
+import logging
+from datetime import datetime
 
+# 创建rich console实例
+console = Console()
 
 def sort_analyst_signals(signals):
     """Sort analyst signals in a consistent order."""
@@ -28,83 +34,138 @@ def print_trading_output(result):
     analyst_signals = result["analyst_signals"]
     portfolio = result.get("data", {}).get("portfolio", {})
 
-    print(f"\n{Fore.CYAN}Crypto Trading Analysis{Style.RESET_ALL}")
-    print("=" * 50)
+    # 创建详细日志
+    log_detailed_analysis(decisions, analyst_signals, portfolio)
+    
+    # 在终端显示简洁的结果表格
+    table = Table(title="Crypto Trading Summary")
+    
+    # 添加表格列
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Signal", style="yellow")
+    table.add_column("Action", style="green")
+    table.add_column("Amount", style="blue")
+    table.add_column("Value ($)", style="magenta")
+    table.add_column("Risk Level", style="red")
+    table.add_column("Stop Loss", style="yellow")
+    table.add_column("Take Profit", style="green")
 
-    # 为每个交易对打印分析结果
-    for symbol in analyst_signals.get("crypto_technical_agent", {}).keys():
-        print(f"\n{Fore.YELLOW}{symbol}{Style.RESET_ALL}")
-        print("-" * 30)
-        
+    # 添加每个交易对的数据
+    for symbol in decisions.keys():
         tech_signal = analyst_signals.get("crypto_technical_agent", {}).get(symbol, {})
         risk_data = analyst_signals.get("crypto_risk_manager", {}).get(symbol, {})
+        decision = decisions[symbol]
         
-        # 显示关键指标
-        if tech_signal:
-            signal = tech_signal.get('signal', 'UNKNOWN')
-            signal_color = Fore.GREEN if signal == 'bullish' else Fore.RED if signal == 'bearish' else Fore.YELLOW
-            print(f"Signal: {signal_color}{signal.upper()}{Style.RESET_ALL}")
-            print(f"Timeframes Analyzed: {', '.join(tech_signal.get('timeframes', ['1h']))}")
-            print(f"Key Indicators:")
-            reasoning = tech_signal.get('reasoning', 'No analysis available')
-            for analysis in reasoning.split(' | '):
-                print(f"  • {analysis}")
+        # 准备数据
+        signal = tech_signal.get('signal', 'UNKNOWN').upper()
+        action = decision.get('action', 'HOLD').upper()
+        quantity = float(decision.get('quantity', 0))
+        current_price = risk_data.get('current_price', 0)
+        value = quantity * current_price
+        risk_level = f"{risk_data.get('volatility', 0) * 100:.1f}%"
+        stop_loss = f"${risk_data.get('stop_loss', 0):,.2f}"
+        take_profit = f"${risk_data.get('take_profit', 0):,.2f}"
         
-        # 显示风险信息
-        if risk_data:
-            volatility = risk_data.get('volatility', 0) * 100
-            volatility_color = Fore.RED if volatility > 40 else Fore.YELLOW if volatility > 20 else Fore.GREEN
-            print(f"\nRisk Level: {volatility_color}{volatility:.1f}%{Style.RESET_ALL}")
-        
-        # 显示交易决策
-        if decisions and symbol in decisions:
-            decision = decisions[symbol]
-            quantity = float(decision.get("quantity", 0))
-            current_price = risk_data.get("current_price", 0)
-            trade_value = quantity * current_price
-            
-            print(f"\n{Fore.WHITE}Trading Decision:{Style.RESET_ALL}")
-            print(f"Action: {Fore.GREEN if decision['action'] == 'buy' else Fore.RED}{decision['action'].upper()}{Style.RESET_ALL}")
-            print(f"Amount: {quantity:.8f} {symbol.replace('USDT', '')}")
-            print(f"Value: ${trade_value:,.2f}")
-            print(f"Confidence: {decision['confidence']:.1f}%")
-            
-            # 显示止损和止盈价格
-            if risk_data:
-                if risk_data.get('stop_loss', 0) > 0:
-                    print(f"Stop Loss: ${risk_data['stop_loss']:,.2f}")
-                if risk_data.get('take_profit', 0) > 0:
-                    print(f"Take Profit: ${risk_data['take_profit']:,.2f}")
-            
-            # 显示投资组合分配
-            if trade_value > 0 and portfolio.get('cash', 0) > 0:
-                allocation_percentage = (trade_value / portfolio['cash']) * 100
-                print(f"Portfolio Allocation: {allocation_percentage:.1f}%")
-        
-        print("-" * 30)
+        table.add_row(
+            symbol,
+            signal,
+            action,
+            f"{quantity:.8f}",
+            f"${value:,.2f}",
+            risk_level,
+            stop_loss,
+            take_profit
+        )
 
-    # 显示投资组合信息
+    # 添加投资组合摘要
     if portfolio:
-        print(f"\n{Fore.WHITE}Portfolio Summary:{Style.RESET_ALL}")
-        print(f"Cash Balance: ${portfolio.get('cash', 0):,.2f}")
+        cash = portfolio.get('cash', 0)
+        total_position_value = sum(
+            pos['amount'] * analyst_signals.get('crypto_risk_manager', {}).get(sym, {}).get('current_price', 0)
+            for sym, pos in portfolio.get('positions', {}).items()
+        )
+        total_value = cash + total_position_value
         
-        # 计算总持仓价值和加权平均波动率
-        total_position_value = 0
-        weighted_volatility = 0
-        for symbol, pos in portfolio.get('positions', {}).items():
-            risk_data = analyst_signals.get('crypto_risk_manager', {}).get(symbol, {})
-            current_price = risk_data.get('current_price', 0)
-            position_value = pos['amount'] * current_price
-            total_position_value += position_value
-            
-            if position_value > 0:
-                weighted_volatility += risk_data.get('volatility', 0) * (position_value / total_position_value)
+        table.add_section()
+        table.add_row(
+            "PORTFOLIO",
+            "",
+            "CASH",
+            "",
+            f"${cash:,.2f}",
+            "",
+            "Total Value:",
+            f"${total_value:,.2f}"
+        )
+
+    # 打印表格
+    console.print(table)
+
+def log_detailed_analysis(decisions, analyst_signals, portfolio):
+    """将详细分析记录到日志文件"""
+    # 创建logs目录
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
         
-        print(f"Position Value: ${total_position_value:,.2f}")
-        print(f"Total Value: ${(portfolio.get('cash', 0) + total_position_value):,.2f}")
-        if weighted_volatility > 0:
-            volatility_color = Fore.RED if weighted_volatility > 0.4 else Fore.YELLOW if weighted_volatility > 0.2 else Fore.GREEN
-            print(f"Portfolio Risk Level: {volatility_color}{weighted_volatility*100:.1f}%{Style.RESET_ALL}")
+    # 设置日志文件
+    log_filename = f"logs/trading_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logging.basicConfig(
+        filename=log_filename,
+        level=logging.INFO,
+        format='%(asctime)s - %(message)s'
+    )
+    
+    logger = logging.getLogger('trading_analysis')
+    
+    # 记录详细分析
+    logger.info("=" * 50)
+    logger.info("DETAILED TRADING ANALYSIS")
+    logger.info("=" * 50)
+    
+    for symbol in decisions.keys():
+        logger.info(f"\nAnalysis for {symbol}")
+        logger.info("-" * 30)
+        
+        # 记录技术分析
+        tech_signal = analyst_signals.get("crypto_technical_agent", {}).get(symbol, {})
+        if tech_signal:
+            logger.info("Technical Analysis:")
+            logger.info(f"Signal: {tech_signal.get('signal', 'UNKNOWN').upper()}")
+            logger.info(f"Timeframes: {', '.join(tech_signal.get('timeframes', ['1h']))}")
+            logger.info("Key Indicators:")
+            for analysis in tech_signal.get('reasoning', '').split(' | '):
+                logger.info(f"  • {analysis}")
+        
+        # 记录风险分析
+        risk_data = analyst_signals.get("crypto_risk_manager", {}).get(symbol, {})
+        if risk_data:
+            logger.info("\nRisk Analysis:")
+            logger.info(f"Risk Level: {risk_data.get('volatility', 0) * 100:.1f}%")
+            logger.info(f"Position Limit: ${risk_data.get('position_limit', 0):,.2f}")
+            logger.info(f"Stop Loss: ${risk_data.get('stop_loss', 0):,.2f}")
+            logger.info(f"Take Profit: ${risk_data.get('take_profit', 0):,.2f}")
+        
+        # 记录交易决策
+        decision = decisions[symbol]
+        logger.info("\nTrading Decision:")
+        logger.info(f"Action: {decision.get('action', 'HOLD').upper()}")
+        logger.info(f"Quantity: {float(decision.get('quantity', 0)):.8f}")
+        logger.info(f"Confidence: {decision.get('confidence', 0):.1f}%")
+        logger.info(f"Reasoning: {decision.get('reasoning', 'No reasoning provided')}")
+    
+    # 记录投资组合信息
+    if portfolio:
+        logger.info("\n" + "=" * 50)
+        logger.info("PORTFOLIO SUMMARY")
+        logger.info("-" * 30)
+        logger.info(f"Cash Balance: ${portfolio.get('cash', 0):,.2f}")
+        
+        total_position_value = sum(
+            pos['amount'] * analyst_signals.get('crypto_risk_manager', {}).get(sym, {}).get('current_price', 0)
+            for sym, pos in portfolio.get('positions', {}).items()
+        )
+        logger.info(f"Total Position Value: ${total_position_value:,.2f}")
+        logger.info(f"Total Portfolio Value: ${(portfolio.get('cash', 0) + total_position_value):,.2f}")
 
 
 def print_backtest_results(table_rows: list) -> None:
