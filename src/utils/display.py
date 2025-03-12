@@ -25,6 +25,8 @@ def sort_analyst_signals(signals):
 
 
 def print_trading_output(result):
+    # import json
+    # print(json.dumps(result, ensure_ascii=False))
     """打印交易系统的输出结果"""
     if not result or "decisions" not in result or "analyst_signals" not in result:
         print("No results to display")
@@ -42,6 +44,7 @@ def print_trading_output(result):
     
     # 添加表格列
     table.add_column("Symbol", style="cyan")
+    table.add_column("Price ($)", style="blue")
     table.add_column("Signal", style="yellow")
     table.add_column("Action", style="green")
     table.add_column("Amount", style="blue")
@@ -57,10 +60,10 @@ def print_trading_output(result):
         decision = decisions[symbol]
         
         # 准备数据
+        current_price = risk_data.get('current_price', 0)
         signal = tech_signal.get('signal', 'UNKNOWN').upper()
         action = decision.get('action', 'HOLD').upper()
         quantity = float(decision.get('quantity', 0))
-        current_price = risk_data.get('current_price', 0)
         value = quantity * current_price
         risk_level = f"{risk_data.get('volatility', 0) * 100:.1f}%"
         stop_loss = f"${risk_data.get('stop_loss', 0):,.2f}"
@@ -68,6 +71,7 @@ def print_trading_output(result):
         
         table.add_row(
             symbol,
+            f"${current_price:,.2f}",
             signal,
             action,
             f"{quantity:.8f}",
@@ -89,6 +93,7 @@ def print_trading_output(result):
         table.add_section()
         table.add_row(
             "PORTFOLIO",
+            "",
             "",
             "CASH",
             "",
